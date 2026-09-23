@@ -403,6 +403,44 @@ rdpShutdownAccelAssist(rdpPtr dev, rdpClientCon *clientCon) {
 }
 
 /******************************************************************************/
+/* Is AVC444 in effect for this connection? Follows
+   client_info.gfx_avc444 from xrdp's negotiation. XRDP_ACCEL_AVC444
+   overrides: unset follows the client, "0" forces off, anything else forces
+   on. The helper applies the same rule to the same variable. */
+static Bool
+rdpClientConAvc444(rdpClientCon *clientCon)
+{
+    const char *env = getenv("XRDP_ACCEL_AVC444");
+
+    if (env != NULL)
+    {
+        return strcmp(env, "0") != 0;
+    }
+    return clientCon->client_info.gfx_avc444 != 0;
+}
+
+/******************************************************************************/
+/* Is the v2 chroma layout in effect? client_info.gfx_avc444 is 2 for v2,
+   1 for v1. XRDP_ACCEL_AVC444_V2 overrides, tri-state as above. */
+static Bool
+rdpClientConAvc444V2(rdpClientCon *clientCon)
+{
+    const char *env = getenv("XRDP_ACCEL_AVC444_V2");
+
+    if (env != NULL)
+    {
+        return strcmp(env, "0") != 0;
+    }
+    /* An older xrdp sends 1 for any AVC444 client; only read 1 as v1 when
+       the peer knows about levels. Otherwise keep the old default, v2. */
+    if (clientCon->client_info.version >= XUP_CLIENT_INFO_LEVEL_AVC444_VERSION)
+    {
+        return clientCon->client_info.gfx_avc444 >= 2;
+    }
+    return clientCon->client_info.gfx_avc444 != 0;
+}
+
+/******************************************************************************/
 static Bool
 rdpClientConUseAccelAssist(rdpPtr dev, rdpClientCon *clientCon)
 {
@@ -1190,6 +1228,7 @@ rdpSendAccelAssistMonitors(rdpPtr dev, rdpClientCon *clientCon)
     int rv;
     int width;
     int height;
+    int caps;
     const int layer_size = 8;
 
     LOG(LOG_LEVEL_INFO, "rdpSendAccelAssistMonitors: monitorCount %d",
@@ -1200,6 +1239,30 @@ rdpSendAccelAssistMonitors(rdpPtr dev, rdpClientCon *clientCon)
     out_uint16_le(clientCon->out_s, 1); /* clear monitors */
     out_uint16_le(clientCon->out_s, 4); /* size */
     clientCon->count++;
+
+    /* Session capabilities, before the pixmap creates below: the helper
+       sizes its encoder at creation. Older helpers skip it by size.
+       Sub-message ids in the type-100 batch are shared with xrdp, which
+       parses the same bytes after the helper forwards them: 1 clear
+       monitors, 2 add monitor, 3 memory allocation complete. So this is 4. */
+    caps = 0;
+    if (rdpClientConAvc444(clientCon))
+    {
+        caps |= XH_CAPS_AVC444;
+        if (rdpClientConAvc444V2(clientCon))
+        {
+            caps |= XH_CAPS_AVC444_V2;
+        }
+    }
+    out_uint16_le(clientCon->out_s, 4);  /* session capabilities */
+    out_uint16_le(clientCon->out_s, 8);  /* size */
+    out_uint32_le(clientCon->out_s, caps);
+    clientCon->count++;
+    LOG(LOG_LEVEL_INFO, "rdpSendAccelAssistMonitors: capabilities 0x%8.8x "
+        "(AVC444 %s)", caps,
+        (caps & XH_CAPS_AVC444)
+        ? ((caps & XH_CAPS_AVC444_V2) ? "v2 negotiated" : "v1 negotiated")
+        : "not negotiated");
     if (dev->monitorCount < 1)
     {
         width = dev->width;
@@ -3189,7 +3252,11 @@ rdpClientConSendPaintRectShmFd(rdpPtr dev, rdpClientCon *clientCon,
         out_uint16_le(s, 0);                    /* flags */
         out_uint32_le(s, wiretosurface1_bytes); /* cmd_bytes */
         out_uint16_le(s, surface_id);           /* surface_id */
-        out_uint16_le(s, 0x000B);               /* codec_id */
+        /* AVC444 (0x000E) when negotiated, else AVC420 (0x000B). The helper
+           got the same answer through the capability message. */
+        out_uint16_le(s, clientCon->use_accel_assist &&
+                         rdpClientConAvc444(clientCon)
+                         ? 0x000E : 0x000B);    /* codec_id */
         out_uint8(s, 0x20);                     /* pixel_format */
 
         out_uint32_le(s, id->flags);            /* flags */
