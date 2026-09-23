@@ -1902,7 +1902,7 @@ rdpClientConInit(rdpPtr dev)
     }
 
     set_sock_name(dev->uds_data, sizeof(dev->uds_data),
-                  "XRDP_X11RDP_SOCKET", "xrdp_display_%s", display);
+                  "XRDP_X11RDP_SOCKET", "xrdp_display_X11-%s", display);
 
     if (dev->listen_sck == 0)
     {
@@ -1920,7 +1920,7 @@ rdpClientConInit(rdpPtr dev)
 
     set_sock_name(dev->disconnect_uds, sizeof(dev->disconnect_uds),
                   "XRDP_DISCONNECT_SOCKET",
-                  "xrdp_disconnect_display_%s", display);
+                  "xrdp_disconnect_display_X11-%s", display);
 
     if (dev->disconnect_sck == 0)
     {
@@ -1982,7 +1982,6 @@ rdpClientConInit(rdpPtr dev)
     LOG(LOG_LEVEL_INFO,
         "rdpClientConInit: kill disconnected [%d] timeout [%d] sec",
         dev->do_kill_disconnected, dev->disconnect_timeout_s);
-
 
     return 0;
 }
