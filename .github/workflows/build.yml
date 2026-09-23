@@ -88,8 +88,11 @@ jobs:
       CC: gcc
       CONF_FLAGS: --enable-glamor
       XRDP_CFLAGS: -I${{ github.workspace }}/xrdp/common
-      # Use a PKG_CONFIG_PATH to pick up the pkg-config file for Xorg
-      PKG_CONFIG_PATH: ${{ github.workspace }}/xorg-build/lib/pkgconfig
+      # Use a PKG_CONFIG_PATH to pick up the pkg-config file for Xorg.
+      # share/pkgconfig is needed as well: xorgproto is architecture
+      # independent and installs xproto.pc there, and without it pkg-config
+      # falls back to the OS copy, which is older than the xserver wants.
+      PKG_CONFIG_PATH: ${{ github.workspace }}/xorg-build/lib/pkgconfig:${{ github.workspace }}/xorg-build/share/pkgconfig
       # This is used for the tests
       XORG: ${{ github.workspace }}/xorg-build/bin/Xorg
 

@@ -237,10 +237,10 @@ if [ -e "$BUILD_TARGET" ]; then
 fi
 
 # Debian has an extra pkgconfig directory to consider in
-# lib/$(uname -p)-linux-gnu/, which meson from pip doesn't pick up on.
+# lib/$(uname -m)-linux-gnu/, which meson from pip doesn't pick up on.
 # Rather than messing with PKG_CONFIG_PATH, we'll use a soft-link to make
 # this work, so the resulting output directory can be more easily managed
-debian_extra_pkgconf="$BUILD_DIR/lib/$(uname -p)-linux-gnu/pkgconfig"
+debian_extra_pkgconf="$BUILD_DIR/lib/$(uname -m)-linux-gnu/pkgconfig"
 if ! [ -L "$debian_extra_pkgconf" ]; then
     mkdir -p "${debian_extra_pkgconf%/*}"
     ln -sf ../pkgconfig "$debian_extra_pkgconf"
