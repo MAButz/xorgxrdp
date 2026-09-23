@@ -469,7 +469,6 @@ rdpRRAddCrtc(rdpPtr dev)
     return 0;
 }
 
-
 /******************************************************************************/
 static int
 rdpRRAddOutput(rdpPtr dev, const char *aname)
@@ -498,9 +497,27 @@ rdpRRConnectOutput(RROutputPtr output, RRCrtcPtr crtc,
     RRModePtr mode;
     xRRModeInfo modeInfo = {0};
     char name[64];
-    const int vfreq = 50;
+    int vfreq;
 
     LOG(LOG_LEVEL_TRACE, "rdpRRConnectOutput:");
+    /* The virtual output's refresh rate. hTotal and vTotal equal the
+       visible size, so dotClock = vfreq * width * height gives exactly
+       vfreq. Applications pacing to the mode paint no faster, so 60 fps
+       content on a 50 Hz mode judders; a higher rate also raises the damage
+       rate for every client. XORGXRDP_VFREQ, default 50. */
+    {
+        const char *env = getenv("XORGXRDP_VFREQ");
+
+        vfreq = (env != NULL) ? atoi(env) : 50;
+        if (vfreq < 1 || vfreq > 240)
+        {
+            LOG(LOG_LEVEL_WARNING, "rdpRRConnectOutput: XORGXRDP_VFREQ %d "
+                "out of range, using 50", vfreq);
+            vfreq = 50;
+        }
+    }
+    LOG(LOG_LEVEL_INFO, "rdpRRConnectOutput: %dx%d at %d Hz",
+        width, height, vfreq);
     sprintf (name, "%dx%d", width, height);
     modeInfo.width = width;
     modeInfo.height = height;
@@ -547,7 +564,6 @@ rdpRRConnectOutput(RROutputPtr output, RRCrtcPtr crtc,
     RRCrtcNotify(crtc, mode, x, y, RR_Rotate_0, NULL, 1, &output);
     return 0;
 }
-
 
 /******************************************************************************/
 static int
