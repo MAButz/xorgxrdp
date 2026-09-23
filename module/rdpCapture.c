@@ -30,7 +30,6 @@ capture
 #include <stdlib.h>
 #include <string.h>
 
-
 /* this should be before all X11 .h files */
 #include <xorg-server.h>
 #include <xorgVersion.h>
@@ -726,7 +725,8 @@ static Bool
 rdpCopyBoxList(rdpClientCon *clientCon, PixmapPtr dstPixmap,
                BoxPtr out_rects, int num_out_rects,
                int srcx, int srcy,
-               int dstx, int dsty)
+               int dstx, int dsty,
+               int cpu_read)
 {
     PixmapPtr hwPixmap;
     BoxPtr pbox;
@@ -741,8 +741,10 @@ rdpCopyBoxList(rdpClientCon *clientCon, PixmapPtr dstPixmap,
     int height;
     char pix1[16];
     rdpPtr dev;
+    CARD32 t_start;
 
     LOG(LOG_LEVEL_TRACE, "rdpCopyBoxList:");
+    t_start = clientCon->timing.enabled ? GetTimeInMillis() : 0;
 
     dev = clientCon->dev;
     pScreen = dev->pScreen;
@@ -773,8 +775,45 @@ rdpCopyBoxList(rdpClientCon *clientCon, PixmapPtr dstPixmap,
         }
     }
     FreeScratchGC(copyGC);
-    pScreen->GetImage(&(dstPixmap->drawable), 0, 0, 1, 1, ZPixmap,
-                          0xffffffff, pix1);
+
+    /* Make the copy visible to the next reader. cpu_read: the caller reads
+       it with the CPU, so drain (1x1 GetImage). Otherwise the reader is
+       accel-assist on the same DRM device, and a flush is enough: implicit
+       fences order its reads after our writes. */
+    if (cpu_read)
+    {
+        if (clientCon->timing.enabled)
+        {
+            CARD32 tc = GetTimeInMillis();
+
+            clientCon->timing.blit_total_ms += (int) (tc - t_start);
+            pScreen->GetImage(&(dstPixmap->drawable), 0, 0, 1, 1, ZPixmap,
+                              0xffffffff, pix1);
+            clientCon->timing.sync_total_ms += (int) (GetTimeInMillis() - tc);
+            clientCon->timing.blit_count++;
+        }
+        else
+        {
+            pScreen->GetImage(&(dstPixmap->drawable), 0, 0, 1, 1, ZPixmap,
+                              0xffffffff, pix1);
+        }
+    }
+    else
+    {
+        if (clientCon->timing.enabled)
+        {
+            CARD32 tc = GetTimeInMillis();
+
+            clientCon->timing.blit_total_ms += (int) (tc - t_start);
+            glamor_block_handler(pScreen);
+            clientCon->timing.sync_total_ms += (int) (GetTimeInMillis() - tc);
+            clientCon->timing.blit_count++;
+        }
+        else
+        {
+            glamor_block_handler(pScreen);
+        }
+    }
 
     return TRUE;
 }
@@ -837,7 +876,6 @@ rdpCaptureSimple(rdpClientCon *clientCon, RegionPtr in_reg, BoxPtr *out_rects,
 
     rv = TRUE;
 
-
     num_rects = REGION_NUM_RECTS(in_reg);
     psrc_rects = REGION_RECTS(in_reg);
 
@@ -860,7 +898,7 @@ rdpCaptureSimple(rdpClientCon *clientCon, RegionPtr in_reg, BoxPtr *out_rects,
         /* copy vmem to smem */
         if (!rdpCopyBoxList(clientCon, clientCon->dev->screenSwPixmap,
                             *out_rects, *num_out_rects,
-                            0, 0, 0, 0))
+                            0, 0, 0, 0, 1))
         {
             return FALSE;
         }
@@ -1019,7 +1057,7 @@ rdpCaptureSufA16(rdpClientCon *clientCon, RegionPtr in_reg, BoxPtr *out_rects,
         /* copy vmem to smem */
         if (!rdpCopyBoxList(clientCon, clientCon->dev->screenSwPixmap,
                             *out_rects, *num_out_rects,
-                            0, 0, 0, 0))
+                            0, 0, 0, 0, 1))
         {
             return FALSE;
         }
@@ -1115,7 +1153,7 @@ rdpCaptureGfxPro(rdpClientCon *clientCon, RegionPtr in_reg, BoxPtr *out_rects,
         /* copy vmem to smem */
         if (!rdpCopyBoxList(clientCon, clientCon->dev->screenSwPixmap,
                             REGION_RECTS(in_reg), REGION_NUM_RECTS(in_reg),
-                            0, 0, 0, 0))
+                            0, 0, 0, 0, 1))
         {
             return FALSE;
         }
@@ -1285,7 +1323,7 @@ rdpCaptureSufA2(rdpClientCon *clientCon, RegionPtr in_reg, BoxPtr *out_rects,
         rv = rdpCopyBoxList(clientCon,
                             clientCon->accelAssistPixmaps[monitor_index],
                             *out_rects, *num_out_rects,
-                            0, 0, id->left, id->top);
+                            0, 0, id->left, id->top, 0);
         id->flags |= 1;
         return rv;
         /* accel assist will do the rest */
@@ -1295,7 +1333,7 @@ rdpCaptureSufA2(rdpClientCon *clientCon, RegionPtr in_reg, BoxPtr *out_rects,
         /* copy vmem to smem */
         rv = rdpCopyBoxList(clientCon, clientCon->dev->screenSwPixmap,
                             *out_rects, *num_out_rects,
-                            0, 0, id->left, id->top);
+                            0, 0, id->left, id->top, 1);
     }
 
     *num_out_rects = num_rects;
@@ -1425,7 +1463,7 @@ rdpCaptureGfxA2(rdpClientCon *clientCon, RegionPtr in_reg, BoxPtr *out_rects,
         rv = rdpCopyBoxList(clientCon,
                             clientCon->accelAssistPixmaps[monitor_index],
                             *out_rects, num_rects,
-                            -id->left, -id->top, 0, 0);
+                            -id->left, -id->top, 0, 0, 0);
         id->flags |= 1;
         return rv;
         /* accel assist will do the rest */
@@ -1439,7 +1477,7 @@ rdpCaptureGfxA2(rdpClientCon *clientCon, RegionPtr in_reg, BoxPtr *out_rects,
         if (!rdpCopyBoxList(clientCon,
                             clientCon->dev->screenSwPixmap,
                             *out_rects, num_rects,
-                            -id->left, -id->top, -id->left, -id->top))
+                            -id->left, -id->top, -id->left, -id->top, 1))
         {
             return FALSE;
         }

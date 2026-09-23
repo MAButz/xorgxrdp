@@ -30,6 +30,63 @@ Client connection to xrdp
 
 #include "xup_client_info.h"
 
+/* Capability bits for the accel-assist helper (control batch message).
+   Must match XH_CAPS_* in xrdp's xrdp_accel_assist.h. */
+#define XH_CAPS_AVC444 (1 << 0)
+#define XH_CAPS_AVC444_V2 (1 << 1)
+
+/* XORGXRDP_TIMING=1: per-stage frame timing on this side of the pipe. */
+struct rdp_timing
+{
+    int enabled;
+    int count;
+    int capture_total_ms;
+    int capture_max_ms;
+    int send_total_ms;
+    int send_max_ms;
+    int ack_total_ms;          /* send -> rect_id_ack, the lockstep gap */
+    int ack_max_ms;
+    /* xrdp's send-to-ack round trip, which unlike ack_total_ms excludes our
+       own capture interval. */
+    int crtt_total_ms;
+    int crtt_max_ms;
+    int crtt_count;
+    int blocked;               /* callbacks that returned early on the gate */
+    CARD32 sent_ms;
+    /* Send time per frame, indexed by rect_id: with frames in flight an ack
+       need not be for the latest one. */
+#define RDP_SEND_TIME_SLOTS 64
+    CARD32 send_time[RDP_SEND_TIME_SLOTS];
+    int blit_total_ms;         /* the CopyArea loop */
+    int sync_total_ms;         /* the 1x1 GetImage that drains the GPU */
+    int blit_count;
+    /* idle_total_ms: time from handing a frame off to the next capture.
+       inflight_total: sum of rect_id - rect_id_ack at capture start.
+       damage_starved: frames that ended with an empty dirtyRegion. */
+    int idle_total_ms;
+    int capture_count;          /* frames actually sent, vs count = acks */
+    int idle_max_ms;
+    int inflight_total;
+    int damage_starved;
+    /* The bounding-box collapse in rdpCapRect: how often, rects discarded,
+       and waste (box area as a percentage of the dirty area; 100 = free).
+       Invisible downstream, where a collapse looks like one large rect. */
+    /* Every capture: rect count and monitor coverage, including single-rect
+       frames the collapse counters do not see. */
+    int dirty_frames;
+    int dirty_rects_total;
+    int dirty_rects_max;
+    int dirty_area_total;       /* percent of the monitor, summed */
+    int dirty_area_max;
+    int dirty_full_frames;      /* captures covering 90% or more */
+    int collapse_considered;    /* frames with more than one dirty rect */
+    int collapse_fired;
+    int collapse_rects_total;   /* pre-collapse rect count, when it fired */
+    int collapse_rects_max;
+    int collapse_waste_total;
+    int collapse_waste_max;
+};
+
 /* used in rdpGlyphs.c */
 struct font_cache
 {
@@ -105,6 +162,7 @@ struct _rdpClientCon
     int font_stamp;
 
     struct xup_client_info client_info;
+    struct rdp_timing timing;
 
     uint8_t *shmemptr;
     int shmemfd;

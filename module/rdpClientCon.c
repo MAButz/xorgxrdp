@@ -230,6 +230,7 @@ rdpClientConGotConnection(ScreenPtr pScreen, rdpPtr dev)
     clientCon->updateRetries = 0;
     clientCon->dev = dev;
     clientCon->shmemfd = -1;
+
     dev->last_event_time_ms = GetTimeInMillis();
     dev->do_dirty_ons = 1;
 
@@ -1489,6 +1490,14 @@ rdpClientConProcessMsgClientInfo(rdpPtr dev, rdpClientCon *clientCon)
                                clientCon->rdp_height);
 
     /* currently only nvenc and h264 is supported */
+    {
+        const char *t = getenv("XORGXRDP_TIMING");
+        clientCon->timing.enabled = (t != NULL && strcmp(t, "0") != 0);
+        if (clientCon->timing.enabled)
+        {
+            LOG(LOG_LEVEL_INFO, "rdpClientConGotConnection: frame timing on");
+        }
+    }
     if (rdpClientConUseAccelAssist(dev, clientCon))
     {
         clientCon->use_accel_assist = 1;
@@ -3236,14 +3245,87 @@ rdpCapRect(rdpClientCon *clientCon, BoxPtr cap_rect, int mon,
         cap_rect->x1, cap_rect->y1, cap_rect->x2, cap_rect->y2);
     rdpRegionIntersect(cap_dirty, cap_dirty, clientCon->dirtyRegion);
     num_rects = REGION_NUM_RECTS(cap_dirty);
-    if (num_rects > MAX_CAPTURE_RECTS)
+    if (num_rects > 0)
     {
-        /* the dirty region is too complex, just get a rect that
-           covers the whole region */
+        /* Above MAX_CAPTURE_RECTS the dirty region is replaced by its
+           bounding box. The area figures are for XORGXRDP_TIMING; pixman
+           rects are disjoint, so the sum of their areas is exact. */
+        BoxPtr dirty_rects;
+        long long union_area;
+        long long extents_area;
+        int waste_pct;
+        int index;
+        int collapse;
+
         rect = *rdpRegionExtents(cap_dirty);
-        rdpRegionDestroy(cap_dirty);
-        cap_dirty = rdpRegionCreate(&rect, 0);
-        num_rects = REGION_NUM_RECTS(cap_dirty);
+        extents_area = (long long) (rect.x2 - rect.x1) *
+                       (rect.y2 - rect.y1);
+        union_area = 0;
+        dirty_rects = REGION_RECTS(cap_dirty);
+        for (index = 0; index < num_rects; index++)
+        {
+            union_area += (long long) (dirty_rects[index].x2 -
+                                       dirty_rects[index].x1) *
+                          (dirty_rects[index].y2 - dirty_rects[index].y1);
+        }
+        waste_pct = (union_area > 0)
+                    ? (int) (extents_area * 100 / union_area) : 100;
+
+        collapse = (num_rects > MAX_CAPTURE_RECTS);
+
+        if (clientCon->timing.enabled)
+        {
+            struct rdp_timing *t = &clientCon->timing;
+            long long mon_area = (long long) (cap_rect->x2 - cap_rect->x1) *
+                                 (cap_rect->y2 - cap_rect->y1);
+            int area_pct = (mon_area > 0)
+                           ? (int) (union_area * 100 / mon_area) : 0;
+
+            t->dirty_frames++;
+            t->dirty_rects_total += num_rects;
+            if (num_rects > t->dirty_rects_max)
+            {
+                t->dirty_rects_max = num_rects;
+            }
+            t->dirty_area_total += area_pct;
+            if (area_pct > t->dirty_area_max)
+            {
+                t->dirty_area_max = area_pct;
+            }
+            if (area_pct >= 90)
+            {
+                t->dirty_full_frames++;
+            }
+        }
+        if (clientCon->timing.enabled && (num_rects > 1))
+        {
+            struct rdp_timing *t = &clientCon->timing;
+
+            t->collapse_considered++;
+            if (collapse)
+            {
+                t->collapse_fired++;
+                t->collapse_rects_total += num_rects;
+                if (num_rects > t->collapse_rects_max)
+                {
+                    t->collapse_rects_max = num_rects;
+                }
+                t->collapse_waste_total += waste_pct;
+                if (waste_pct > t->collapse_waste_max)
+                {
+                    t->collapse_waste_max = waste_pct;
+                }
+            }
+        }
+
+        if (collapse)
+        {
+            /* the dirty region is too complex, just get a rect that
+               covers the whole region */
+            rdpRegionDestroy(cap_dirty);
+            cap_dirty = rdpRegionCreate(&rect, 0);
+            num_rects = REGION_NUM_RECTS(cap_dirty);
+        }
     }
     /* make a copy of cap_dirty because it may get altered */
     cap_dirty_save = rdpRegionCreate(NullBox, 0);
@@ -3254,8 +3336,10 @@ rdpCapRect(rdpClientCon *clientCon, BoxPtr cap_rect, int mon,
         num_rects = 0;
         LOG(LOG_LEVEL_TRACE, "rdpCapRect: capture_code %d",
             clientCon->client_info.capture_code);
+        CARD32 t0 = clientCon->timing.enabled ? GetTimeInMillis() : 0;
         if (rdpCapture(clientCon, cap_dirty, &rects, &num_rects, id))
         {
+            CARD32 t1 = clientCon->timing.enabled ? GetTimeInMillis() : 0;
             LOG(LOG_LEVEL_TRACE, "rdpCapRect: num_rects %d", num_rects);
             if (clientCon->send_key_frame[mon])
             {
@@ -3265,6 +3349,41 @@ rdpCapRect(rdpClientCon *clientCon, BoxPtr cap_rect, int mon,
             }
             rdpClientConSendPaintRectShmFd(clientCon->dev, clientCon, id,
                                            cap_dirty, rects, num_rects);
+            if (clientCon->timing.enabled)
+            {
+                CARD32 t2 = GetTimeInMillis();
+                int cap = (int) (t1 - t0);
+                int snd = (int) (t2 - t1);
+
+                clientCon->timing.capture_total_ms += cap;
+                clientCon->timing.send_total_ms += snd;
+                if (cap > clientCon->timing.capture_max_ms)
+                {
+                    clientCon->timing.capture_max_ms = cap;
+                }
+                if (snd > clientCon->timing.send_max_ms)
+                {
+                    clientCon->timing.send_max_ms = snd;
+                }
+                /* Dead time since the previous frame went out. Measured
+                   here, since most ack-scheduled callbacks send nothing. */
+                if (clientCon->timing.sent_ms != 0)
+                {
+                    int idle = (int) (t0 - clientCon->timing.sent_ms);
+
+                    clientCon->timing.idle_total_ms += idle;
+                    if (idle > clientCon->timing.idle_max_ms)
+                    {
+                        clientCon->timing.idle_max_ms = idle;
+                    }
+                }
+                clientCon->timing.inflight_total +=
+                    clientCon->rect_id - clientCon->rect_id_ack;
+                clientCon->timing.capture_count++;
+                clientCon->timing.sent_ms = t2;
+                clientCon->timing.send_time[clientCon->rect_id %
+                                            RDP_SEND_TIME_SLOTS] = t2;
+            }
             free(rects);
         }
         else
@@ -3309,6 +3428,7 @@ rdpDeferredUpdateCallback(OsTimerPtr timer, CARD32 now, pointer arg)
         /* do not allow captures until we have the client_info */
         clientCon->client_info.size == 0)
     {
+        clientCon->timing.blocked++;
         return 0;
     }
     clientCon->lastUpdateTime = now;
@@ -3369,10 +3489,13 @@ rdpDeferredUpdateCallback(OsTimerPtr timer, CARD32 now, pointer arg)
     {
         rdpScheduleDeferredUpdate(clientCon);
     }
+    else if (clientCon->timing.enabled)
+    {
+        clientCon->timing.damage_starved++;
+    }
 
     return 0;
 }
-
 
 /******************************************************************************/
 static void
