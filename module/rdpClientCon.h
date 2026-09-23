@@ -173,14 +173,32 @@ struct _rdpClientCon
     int rect_id_ack;
     enum shared_memory_status shmemstatus;
 
-    PixmapPtr accelAssistPixmaps[16];
+    /* Two capture buffers per monitor, alternated so a frame can be
+       captured while the helper reads the previous one. rdpCapture copies
+       only damage, but the full-frame AVC444 aux pass reads the whole
+       texture, so accelAssistPending[mon][buf] holds the damage this buffer
+       has missed; a capture copies it along with the current damage. The
+       client is still told only the current damage. */
+    PixmapPtr accelAssistPixmaps[16][2];
+    RegionPtr accelAssistPending[16][2];
+    int accelAssistBuf[16];
+    int capture_depth;         /* XORGXRDP_CAPTURE_DEPTH, 1 or 2 */
 
     OsTimerPtr updateTimer;
     CARD32 lastUpdateTime; /* millisecond timestamp */
     int updateScheduled; /* boolean */
     int updateRetries;
 
+    /* Minimum spacing between captures for this connection: seeded from
+       client_info, then steered by adaptive pacing. Per connection, since
+       the right value depends on the client. */
     CARD32 msFrameInterval;
+    int pace_enabled;          /* XORGXRDP_ADAPTIVE_PACE */
+    int pace_min_ms;           /* XORGXRDP_PACE_MIN_MS */
+    int pace_max_ms;           /* XORGXRDP_PACE_MAX_MS */
+    int pace_rtt_ms;           /* smoothed client rtt, the control signal */
+    int pace_samples;          /* acks seen, until the average is warm */
+    int pace_good_run;         /* consecutive acks the client kept up on */
 
     RegionPtr dirtyRegion;
 

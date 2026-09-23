@@ -1278,6 +1278,100 @@ rdpCaptureGfxPro(rdpClientCon *clientCon, RegionPtr in_reg, BoxPtr *out_rects,
 }
 
 /******************************************************************************/
+/* Pick the capture buffer for this frame and return its index. With two
+   buffers, *owed covers the current damage plus what this buffer missed
+   since it was last written; the caller copies and destroys it. NULL with
+   one buffer, which accumulates everything anyway. */
+static int
+rdpCaptureAccelAssistBuffer(rdpClientCon *clientCon, int monitor_index,
+                            RegionPtr in_reg, struct image_data *id,
+                            RegionPtr *owed, BoxPtr *owed_rects,
+                            int *num_owed_rects)
+{
+    int buf_index;
+    int other;
+    RegionPtr pending;
+
+    *owed = NULL;
+    *owed_rects = NULL;
+    *num_owed_rects = 0;
+    if (clientCon->capture_depth < 2 ||
+        clientCon->accelAssistPixmaps[monitor_index][1] == NULL)
+    {
+        /* One buffer: stay on zero, which converges on the whole screen. */
+        return 0;
+    }
+    buf_index = clientCon->accelAssistBuf[monitor_index];
+    other = buf_index ^ 1;
+    clientCon->accelAssistBuf[monitor_index] = other;
+    if (buf_index)
+    {
+        id->flags |= ACCEL_ASSIST_BUFFER_1;
+    }
+    else
+    {
+        id->flags &= ~ACCEL_ASSIST_BUFFER_1;
+    }
+    /* What this buffer owes, plus the current damage. */
+    *owed = rdpRegionCreate(NullBox, 0);
+    rdpRegionCopy(*owed, in_reg);
+    pending = clientCon->accelAssistPending[monitor_index][buf_index];
+    if (pending != NULL)
+    {
+        rdpRegionUnion(*owed, *owed, pending);
+        rdpRegionDestroy(pending);
+    }
+
+    clientCon->accelAssistPending[monitor_index][buf_index] =
+        rdpRegionCreate(NullBox, 0);
+    /* The other buffer now owes this frame's damage too. */
+    pending = clientCon->accelAssistPending[monitor_index][other];
+    if (pending == NULL)
+    {
+        pending = rdpRegionCreate(NullBox, 0);
+        clientCon->accelAssistPending[monitor_index][other] = pending;
+    }
+    rdpRegionUnion(pending, pending, in_reg);
+    /* Grow to even boundaries, like the rects sent to the client: chroma is
+       half resolution, so an odd edge leaves a stale half sample. */
+    {
+        BoxPtr src;
+        int count;
+        int i;
+
+        count = REGION_NUM_RECTS(*owed);
+        src = REGION_RECTS(*owed);
+        *owed_rects = (BoxPtr) malloc(sizeof(BoxRec) * count);
+        if (*owed_rects == NULL)
+        {
+            rdpRegionDestroy(*owed);
+            *owed = NULL;
+            return buf_index;
+        }
+        for (i = 0; i < count; i++)
+        {
+            BoxRec r = src[i];
+
+            r.x1 -= r.x1 & 1;
+            r.y1 -= r.y1 & 1;
+            r.x2 += r.x2 & 1;
+            r.y2 += r.y2 & 1;
+            if (r.x2 > id->width)
+            {
+                r.x2 = id->width & ~1;
+            }
+            if (r.y2 > id->height)
+            {
+                r.y2 = id->height & ~1;
+            }
+            (*owed_rects)[i] = r;
+        }
+        *num_owed_rects = count;
+    }
+    return buf_index;
+}
+
+/******************************************************************************/
 /* make out_rects always multiple of 2 width and height */
 static Bool
 rdpCaptureSufA2(rdpClientCon *clientCon, RegionPtr in_reg, BoxPtr *out_rects,
@@ -1317,13 +1411,34 @@ rdpCaptureSufA2(rdpClientCon *clientCon, RegionPtr in_reg, BoxPtr *out_rects,
     }
 
     monitor_index = (id->flags >> 28) & 0xF;
-    if (clientCon->accelAssistPixmaps[monitor_index] != NULL)
+    if (clientCon->accelAssistPixmaps[monitor_index][0] != NULL)
     {
+        BoxPtr copy_rects = *out_rects;
+        int num_copy_rects = *num_out_rects;
+        BoxPtr owed_rects = NULL;
+        int num_owed_rects = 0;
+        RegionPtr owed = NULL;
+        int buf_index;
+
+        buf_index = rdpCaptureAccelAssistBuffer(clientCon, monitor_index,
+                                                in_reg, id, &owed,
+                                                &owed_rects, &num_owed_rects);
+        if (owed_rects != NULL)
+        {
+            copy_rects = owed_rects;
+            num_copy_rects = num_owed_rects;
+        }
         /* copy vmem to vmem */
         rv = rdpCopyBoxList(clientCon,
-                            clientCon->accelAssistPixmaps[monitor_index],
-                            *out_rects, *num_out_rects,
+                            clientCon->accelAssistPixmaps[monitor_index]
+                            [buf_index],
+                            copy_rects, num_copy_rects,
                             0, 0, id->left, id->top, 0);
+        if (owed != NULL)
+        {
+            rdpRegionDestroy(owed);
+        }
+        free(owed_rects);
         id->flags |= 1;
         return rv;
         /* accel assist will do the rest */
@@ -1454,16 +1569,37 @@ rdpCaptureGfxA2(rdpClientCon *clientCon, RegionPtr in_reg, BoxPtr *out_rects,
     }
     rv = TRUE;
     monitor_index = (id->flags >> 28) & 0xF;
-    if (clientCon->accelAssistPixmaps[monitor_index] != NULL)
+    if (clientCon->accelAssistPixmaps[monitor_index][0] != NULL)
     {
+        BoxPtr copy_rects = *out_rects;
+        int num_copy_rects = num_rects;
+        BoxPtr owed_rects = NULL;
+        int num_owed_rects = 0;
+        RegionPtr owed = NULL;
+        int buf_index;
+
+        buf_index = rdpCaptureAccelAssistBuffer(clientCon, monitor_index,
+                                                in_reg, id, &owed,
+                                                &owed_rects, &num_owed_rects);
+        if (owed_rects != NULL)
+        {
+            copy_rects = owed_rects;
+            num_copy_rects = num_owed_rects;
+        }
         LOG(LOG_LEVEL_TRACE,
-            "rdpCaptureGfxA2: a monitor_index %d left %d top %d",
-            monitor_index, id->left, id->top);
+            "rdpCaptureGfxA2: a monitor_index %d left %d top %d buf %d",
+            monitor_index, id->left, id->top, buf_index);
         /* copy vmem to vmem */
         rv = rdpCopyBoxList(clientCon,
-                            clientCon->accelAssistPixmaps[monitor_index],
-                            *out_rects, num_rects,
+                            clientCon->accelAssistPixmaps[monitor_index]
+                            [buf_index],
+                            copy_rects, num_copy_rects,
                             -id->left, -id->top, 0, 0, 0);
+        if (owed != NULL)
+        {
+            rdpRegionDestroy(owed);
+        }
+        free(owed_rects);
         id->flags |= 1;
         return rv;
         /* accel assist will do the rest */
