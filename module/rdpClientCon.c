@@ -1242,9 +1242,11 @@ static int
 rdpStartAccelAssist(rdpPtr dev, rdpClientCon *clientCon)
 {
     char text[64];
+    char drm_device[PATH_MAX];
     int spair[2];
     int ready[2];
     int index;
+    ssize_t len;
 
     // Accel assist is already running, don't attempt to initialize it again.
     if (clientCon->accel_assist_pid > 0)
@@ -1277,6 +1279,17 @@ rdpStartAccelAssist(rdpPtr dev, rdpClientCon *clientCon)
     else if (clientCon->accel_assist_pid == 0)
     {
         /* child */
+        /* The GPU glamor renders on, from the fd it opened (DRMDevice may
+           be a by-path link or a card node). The helper encodes on the
+           same GPU: the frames reach its encoder as dma-bufs. */
+        drm_device[0] = 0;
+        if (dev->glamor && dev->fd >= 0)
+        {
+            snprintf(text, 63, "/proc/self/fd/%d", dev->fd);
+            text[63] = 0;
+            len = readlink(text, drm_device, sizeof(drm_device) - 1);
+            drm_device[len > 0 ? len : 0] = 0;
+        }
         for (index = 0; index < 256; index++)
         {
             if ((index != clientCon->sck) && (index != spair[0]) &&
@@ -1304,6 +1317,10 @@ rdpStartAccelAssist(rdpPtr dev, rdpClientCon *clientCon)
         snprintf(text, 63, "%d", ready[1]);
         text[63] = 0;
         setenv("XRDP_ACCEL_ASSIST_READY_FD", text, 1);
+        if (drm_device[0] != 0)
+        {
+            setenv("XRDP_ACCEL_ASSIST_DRM_DEVICE", drm_device, 1);
+        }
         snprintf(text, 63, "%s/xrdp-accel-assist", XRDP_LIBEXEC_PATH);
         text[63] = 0;
         execlp(text, text, "-d", (void *) 0);
