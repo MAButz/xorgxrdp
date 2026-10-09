@@ -34,6 +34,7 @@ Client connection to xrdp
    Must match XH_CAPS_* in xrdp's xrdp_accel_assist.h. */
 #define XH_CAPS_AVC444 (1 << 0)
 #define XH_CAPS_AVC444_V2 (1 << 1)
+#define XH_CAPS_NO_DIG_PRODUCT_ID (1 << 2)
 
 /* XORGXRDP_TIMING=1: per-stage frame timing on this side of the pipe. */
 struct rdp_timing
