@@ -1393,6 +1393,14 @@ rdpSendAccelAssistMonitors(rdpPtr dev, rdpClientCon *clientCon)
             caps |= XH_CAPS_AVC444_V2;
         }
     }
+    /* Level 3: the client sent no clientDigProductId (FreeRDP). The
+       helper's XRDP_AVC444_V2_ODD_WIDTH=auto keeps v2 for it. */
+    if ((clientCon->client_info.version >=
+            XUP_CLIENT_INFO_LEVEL_AVC444_VERSION) &&
+            (clientCon->client_info.gfx_avc444 >= 3))
+    {
+        caps |= XH_CAPS_NO_DIG_PRODUCT_ID;
+    }
     out_uint16_le(clientCon->out_s, 4);  /* session capabilities */
     out_uint16_le(clientCon->out_s, 8);  /* size */
     out_uint32_le(clientCon->out_s, caps);
