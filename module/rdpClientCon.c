@@ -514,6 +514,12 @@ rdpClientConDisconnect(rdpPtr dev, rdpClientCon *clientCon)
 
     rdpRegionDestroy(clientCon->dirtyRegion);
     rdpRegionDestroy(clientCon->shmRegion);
+    if (clientCon->idleFlushTimer != NULL)
+    {
+        TimerCancel(clientCon->idleFlushTimer);
+        TimerFree(clientCon->idleFlushTimer);
+        clientCon->idleFlushTimer = NULL;
+    }
     if (clientCon->updateTimer != NULL)
     {
         TimerCancel(clientCon->updateTimer);
@@ -3774,6 +3780,69 @@ rdpCapRect(rdpClientCon *clientCon, BoxPtr cap_rect, int mon,
 }
 
 /******************************************************************************/
+/* how long after the last capture the idle flush comes; matches wlxrdp's */
+#define IDLE_FLUSH_MS 150
+
+/******************************************************************************/
+/* Captures have stopped: damage one 16x16 corner of every monitor and
+   capture once more. The helper compares it with what it last encoded,
+   finds nothing changed, and sends the aux view the areas that were moving
+   still owe, or no frame at all. */
+static CARD32
+rdpIdleFlushCallback(OsTimerPtr timer, CARD32 now, pointer arg)
+{
+    rdpClientCon *clientCon = (rdpClientCon *)arg;
+    int index;
+    BoxRec box;
+
+    if (clientCon->suppress_output)
+    {
+        return 0;
+    }
+    clientCon->idleFlushPending = TRUE;
+    if (clientCon->dev->monitorCount < 1)
+    {
+        box.x1 = 0;
+        box.y1 = 0;
+        box.x2 = clientCon->rdp_width < 16 ? clientCon->rdp_width : 16;
+        box.y2 = clientCon->rdp_height < 16 ? clientCon->rdp_height : 16;
+        rdpClientConAddDirtyScreenBox(clientCon->dev, clientCon, &box);
+    }
+    else
+    {
+        for (index = 0; index < clientCon->dev->monitorCount; index++)
+        {
+            box.x1 = clientCon->dev->minfo[index].left;
+            box.y1 = clientCon->dev->minfo[index].top;
+            box.x2 = box.x1 + 16;
+            box.y2 = box.y1 + 16;
+            rdpClientConAddDirtyScreenBox(clientCon->dev, clientCon, &box);
+        }
+    }
+    return 0;
+}
+
+/******************************************************************************/
+/* After a capture: (re)arm the idle flush, unless this capture was it. */
+static void
+rdpIdleFlushArm(rdpClientCon *clientCon)
+{
+    if (clientCon->idleFlushPending)
+    {
+        clientCon->idleFlushPending = FALSE;
+        return;
+    }
+    if (!clientCon->use_accel_assist ||
+            !rdpClientConAvc444(clientCon))
+    {
+        return;
+    }
+    clientCon->idleFlushTimer = TimerSet(clientCon->idleFlushTimer, 0,
+                                         IDLE_FLUSH_MS, rdpIdleFlushCallback,
+                                         clientCon);
+}
+
+/******************************************************************************/
 static CARD32
 rdpDeferredUpdateCallback(OsTimerPtr timer, CARD32 now, pointer arg)
 {
@@ -3814,6 +3883,7 @@ rdpDeferredUpdateCallback(OsTimerPtr timer, CARD32 now, pointer arg)
         return 0;
     }
     clientCon->lastUpdateTime = now;
+    rdpIdleFlushArm(clientCon);
     LOG(LOG_LEVEL_TRACE, "rdpDeferredUpdateCallback: sending");
     clientCon->updateRetries = 0;
     if (clientCon->dev->monitorCount < 1)
