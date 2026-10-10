@@ -190,7 +190,7 @@ struct _rdpClientCon
     int updateRetries;
 
     /* AVC444 through the helper: once captures stop, one more small one
-       after XORGXRDP_IDLE_FLUSH_MS, so the helper can send the aux view
+       150 ms later (IDLE_FLUSH_MS), so the helper can send the aux view
        that moving areas still owe (it skips the frame when none is owed). */
     OsTimerPtr idleFlushTimer;
     int idleFlushPending;  /* the next capture is that one */
