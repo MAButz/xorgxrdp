@@ -30,6 +30,10 @@ Client connection to xrdp
 
 #include "xup_client_info.h"
 
+#define XRDP_SCREEN_SLEEP_MODE_LAST 0
+#define XRDP_SCREEN_SLEEP_MODE_BLACK 1
+#define XRDP_SCREEN_SLEEP_MODE_REFRESH 2
+
 /* Capability bits for the accel-assist helper (control batch message).
    Must match XH_CAPS_* in xrdp's xrdp_accel_assist.h. */
 #define XH_CAPS_AVC444 (1 << 0)
@@ -237,6 +241,14 @@ extern _X_EXPORT int
 rdpClientConInit(rdpPtr dev);
 extern _X_EXPORT int
 rdpClientConDeinit(rdpPtr dev);
+extern _X_EXPORT int
+rdpScreenSleepWake(rdpPtr dev, const char *reason);
+extern _X_EXPORT int
+rdpScreenSleepBlockUpdates(rdpPtr dev);
+extern _X_EXPORT int
+rdpScreenSleepBlockDraws(rdpPtr dev);
+extern _X_EXPORT int
+rdpScreenSleepActivity(rdpPtr dev, CARD32 now);
 
 extern _X_EXPORT int
 rdpClientConDeleteOsSurface(rdpPtr dev, rdpClientCon *clientCon, int rdpindex);

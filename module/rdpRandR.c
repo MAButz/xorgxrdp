@@ -252,7 +252,6 @@ rdpRRScreenCreateBacking(ScreenPtr pScreen)
     return TRUE;
 }
 
-/******************************************************************************/
 Bool
 rdpRRScreenSetSize(ScreenPtr pScreen, CARD16 width, CARD16 height,
                    CARD32 mmWidth, CARD32 mmHeight)
