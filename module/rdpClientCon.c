@@ -533,6 +533,13 @@ rdpScreenSleepEnter(rdpPtr dev, CARD32 now, const char *caller, int log_message)
             TimerCancel(clientCon->updateTimer);
         }
         clientCon->updateScheduled = FALSE;
+        /* the idle flush's capture would be blocked, and its pending flag
+           would make the first capture after the wake count as the flush */
+        if (clientCon->idleFlushTimer != NULL)
+        {
+            TimerCancel(clientCon->idleFlushTimer);
+        }
+        clientCon->idleFlushPending = FALSE;
         clientCon = clientCon->next;
     }
 
