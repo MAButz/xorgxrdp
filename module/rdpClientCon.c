@@ -4532,6 +4532,7 @@ rdpDeferredUpdateCallback(OsTimerPtr timer, CARD32 now, pointer arg)
     int index;
     int monitor_index;
     int monitor_count;
+    int monitor_start;
     int depth;
     BoxRec cap_rect;
 
@@ -4597,6 +4598,11 @@ rdpDeferredUpdateCallback(OsTimerPtr timer, CARD32 now, pointer arg)
     {
         monitor_index = 0;
         monitor_count = clientCon->dev->monitorCount;
+        /* Fix the start before the scan: with a capture depth above 1 a
+           capture inside the loop bumps rect_id, and an index taken from
+           the live rect_id would visit one monitor twice and skip another,
+           whose damage the "gone through all monitors" below then drops. */
+        monitor_start = clientCon->rect_id;
         while (monitor_index < monitor_count)
         {
             // Did we get anything from the last monitor?
@@ -4610,7 +4616,7 @@ rdpDeferredUpdateCallback(OsTimerPtr timer, CARD32 now, pointer arg)
             }
             // Offset the monitor index by the rectangle ID so we start
             // the monitor scan on a different monitor each time.
-            index = (clientCon->rect_id + monitor_index) % monitor_count;
+            index = (monitor_start + monitor_index) % monitor_count;
             cap_rect.x1 = clientCon->dev->minfo[index].left;
             cap_rect.y1 = clientCon->dev->minfo[index].top;
             cap_rect.x2 = clientCon->dev->minfo[index].right + 1;
