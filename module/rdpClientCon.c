@@ -1574,10 +1574,12 @@ rdpClientConResizeAllMemoryAreas(rdpPtr dev, rdpClientCon *clientCon)
 
         const char *cd = getenv("XORGXRDP_CAPTURE_DEPTH");
 
-        /* One by default. Two captures the next frame while the previous
+        /* Two by default: the next frame is captured while the previous
            is in flight; each buffer also gets the damage it missed, so the
-           full-frame AVC444 aux pass never reads a stale pixel. */
-        clientCon->capture_depth = (cd != NULL) ? atoi(cd) : 1;
+           full-frame AVC444 aux pass never reads a stale pixel. One is
+           strict lockstep. It applies only with accel-assist's two
+           buffers. */
+        clientCon->capture_depth = (cd != NULL) ? atoi(cd) : 2;
         if (clientCon->capture_depth < 1)
         {
             clientCon->capture_depth = 1;
@@ -1586,7 +1588,11 @@ rdpClientConResizeAllMemoryAreas(rdpPtr dev, rdpClientCon *clientCon)
         {
             clientCon->capture_depth = 2;
         }
-        clientCon->pace_enabled = (ap != NULL && atoi(ap) != 0);
+        /* On by default, "0" turns it off. Without the round trip from xrdp
+           (an older xrdp) the loop never moves and the interval stays at
+           its seed. Depth 2 was measured with pacing on: with a fixed
+           interval it delivered frames in pairs. */
+        clientCon->pace_enabled = (ap == NULL || atoi(ap) != 0);
         /* The floor defaults to 20 ms: the default RandR mode is 50 Hz, and
            applications that pace to it paint no faster. */
         clientCon->pace_min_ms = (pmin != NULL) ? atoi(pmin) : 20;
@@ -1599,12 +1605,16 @@ rdpClientConResizeAllMemoryAreas(rdpPtr dev, rdpClientCon *clientCon)
         {
             clientCon->pace_max_ms = clientCon->pace_min_ms;
         }
+        LOG(LOG_LEVEL_INFO, "    capture depth %d",
+            clientCon->capture_depth);
         if (clientCon->pace_enabled)
         {
-            LOG(LOG_LEVEL_INFO, "    capture depth %d",
-            clientCon->capture_depth);
-        LOG(LOG_LEVEL_INFO, "    adaptive pacing on, interval %d-%d ms",
+            LOG(LOG_LEVEL_INFO, "    adaptive pacing on, interval %d-%d ms",
                 clientCon->pace_min_ms, clientCon->pace_max_ms);
+        }
+        else
+        {
+            LOG(LOG_LEVEL_INFO, "    adaptive pacing off");
         }
     }
     rdpClientConAllocateSharedMemory(clientCon, bytes);

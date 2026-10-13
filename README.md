@@ -57,7 +57,7 @@ client sharing the session. Measured on one host, same session and same
 content: a native client acknowledged frames in **11-18 ms** while a browser
 client at HiDPI took **222-289 ms**. No single constant serves both.
 
-`XORGXRDP_ADAPTIVE_PACE=1` moves the interval to the connection and steers it
+Adaptive pacing, on by default (`XORGXRDP_ADAPTIVE_PACE=0` turns it off), moves the interval to the connection and steers it
 from the round trip **xrdp** measures to that client, which arrives on the
 frame-acknowledgement message and is reported as `client rtt`. The loop moves a
 quarter of the way towards the smoothed round trip in both directions, backing
@@ -75,6 +75,11 @@ fourfold where the true figure moved twentyfold.
 Measured effect on a native client with a saturating source, together with
 capture depth 2: **26 fps to 51**, blocked capture callbacks from 155-173 per
 hundred frames down to 1-6, idle time from 36 ms to 18-20.
+
+With pacing on, depth 2 costs nothing on a fast link: 30 and 60 fps sources
+arrive at the same rate, with the same frame-interval spread and latency, at
+either depth. Without pacing, depth 2 delivered frames in pairs, which is why
+the two are on together by default.
 
 ### Advertised refresh rate
 
@@ -97,7 +102,7 @@ accel-assist pixmap, and there is deliberately **one** buffer per monitor. That 
 self-correcting: the buffer accumulates every box ever copied, so it converges on a
 complete picture.
 
-`XORGXRDP_CAPTURE_DEPTH=2` allocates a second buffer and alternates them, so the
+Capture depth 2, the default (`XORGXRDP_CAPTURE_DEPTH=1` restores strict lockstep), allocates a second buffer and alternates them, so the
 next frame can be captured while the previous is still in flight. Alternating
 naively breaks that invariant - neither buffer is ever complete, since each holds
 only the boxes that happened to land in it. The main view survives, because its
