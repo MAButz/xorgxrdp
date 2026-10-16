@@ -2385,6 +2385,15 @@ rdpClientConPaceUpdate(rdpClientCon *clientCon, int rtt)
     {
         return;
     }
+    /* Clamp an implausible sample: one round trip of seconds or minutes
+       (seen after an idle spell) would otherwise lift the average far
+       enough to hold the interval at its ceiling for dozens of frames. A
+       client that is really this slow still drives the target to
+       pace_max_ms, since four times the ceiling is above it. */
+    if (rtt > clientCon->pace_max_ms * 4)
+    {
+        rtt = clientCon->pace_max_ms * 4;
+    }
     /* EWMA, to ride out single-frame spikes. */
     if (clientCon->pace_rtt_ms == 0)
     {
