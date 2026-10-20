@@ -210,6 +210,9 @@ struct _rdpClientCon
     int pace_rtt_ms;           /* smoothed client rtt, the control signal */
     int pace_samples;          /* acks seen, until the average is warm */
     int pace_good_run;         /* consecutive acks the client kept up on */
+    int pace_idle_min_ms;      /* XORGXRDP_PACE_IDLE_MIN_MS, 0 = off */
+    int pace_idle_after_ms;    /* XORGXRDP_PACE_IDLE_AFTER_MS */
+    int pace_idle_capped;      /* the scheduled capture waits on that floor */
 
     RegionPtr dirtyRegion;
 

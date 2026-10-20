@@ -362,6 +362,7 @@ rdpScreenSleepScheduleForcedUpdate(rdpClientCon *clientCon, CARD32 delay_ms)
     clientCon->updateTimer = TimerSet(clientCon->updateTimer, 0, delay_ms,
                                       rdpDeferredUpdateCallback, clientCon);
     clientCon->updateScheduled = TRUE;
+    clientCon->pace_idle_capped = 0;
     return 0;
 }
 
@@ -1571,6 +1572,8 @@ rdpClientConResizeAllMemoryAreas(rdpPtr dev, rdpClientCon *clientCon)
         const char *ap = getenv("XORGXRDP_ADAPTIVE_PACE");
         const char *pmin = getenv("XORGXRDP_PACE_MIN_MS");
         const char *pmax = getenv("XORGXRDP_PACE_MAX_MS");
+        const char *pimin = getenv("XORGXRDP_PACE_IDLE_MIN_MS");
+        const char *piafter = getenv("XORGXRDP_PACE_IDLE_AFTER_MS");
 
         const char *cd = getenv("XORGXRDP_CAPTURE_DEPTH");
 
@@ -1605,8 +1608,28 @@ rdpClientConResizeAllMemoryAreas(rdpPtr dev, rdpClientCon *clientCon)
         {
             clientCon->pace_max_ms = clientCon->pace_min_ms;
         }
+        /* Off by default. A floor on the interval while nobody types or
+           moves the mouse: an animated page left on screen (a dashboard)
+           otherwise runs the encoder at the full rate all day. */
+        clientCon->pace_idle_min_ms = (pimin != NULL) ? atoi(pimin) : 0;
+        clientCon->pace_idle_after_ms = (piafter != NULL) ? atoi(piafter) :
+                                        1000;
+        if (clientCon->pace_idle_min_ms < 0)
+        {
+            clientCon->pace_idle_min_ms = 0;
+        }
+        if (clientCon->pace_idle_after_ms < 0)
+        {
+            clientCon->pace_idle_after_ms = 0;
+        }
         LOG(LOG_LEVEL_INFO, "    capture depth %d",
             clientCon->capture_depth);
+        if (clientCon->pace_idle_min_ms > 0)
+        {
+            LOG(LOG_LEVEL_INFO, "    interval at least %d ms after %d ms "
+                "without input", clientCon->pace_idle_min_ms,
+                clientCon->pace_idle_after_ms);
+        }
         if (clientCon->pace_enabled)
         {
             LOG(LOG_LEVEL_INFO, "    adaptive pacing on, interval %d-%d ms",
@@ -1725,6 +1748,28 @@ rdpClientConProcessMonitorUpdateMsg(rdpPtr dev, rdpClientCon *clientCon,
 }
 
 /******************************************************************************/
+/* Input ends the idle floor at once: a capture already waiting on it is
+   rescheduled at the normal interval, so the first frame after a key or
+   mouse event is not held back. */
+static void
+rdpClientConPaceInput(rdpPtr dev)
+{
+    rdpClientCon *clientCon;
+
+    clientCon = dev->clientConHead;
+    while (clientCon != NULL)
+    {
+        if (clientCon->updateScheduled && clientCon->pace_idle_capped)
+        {
+            TimerCancel(clientCon->updateTimer);
+            clientCon->updateScheduled = FALSE;
+            rdpScheduleDeferredUpdate(clientCon);
+        }
+        clientCon = clientCon->next;
+    }
+}
+
+/******************************************************************************/
 static int
 rdpClientConProcessMsgClientInput(rdpPtr dev, rdpClientCon *clientCon)
 {
@@ -1753,10 +1798,12 @@ rdpClientConProcessMsgClientInput(rdpPtr dev, rdpClientCon *clientCon)
     if (msg < 100)
     {
         rdpInputKeyboardEvent(dev, msg, param1, param2, param3, param4);
+        rdpClientConPaceInput(dev);
     }
     else if (msg < 200)
     {
         rdpInputMouseEvent(dev, msg, param1, param2, param3, param4);
+        rdpClientConPaceInput(dev);
     }
     else if (msg == 200) /* invalidate */
     {
@@ -4521,6 +4568,7 @@ rdpDeferredUpdateCallback(OsTimerPtr timer, CARD32 now, pointer arg)
 
     LOG(LOG_LEVEL_TRACE, "rdpDeferredUpdateCallback:");
     clientCon->updateScheduled = FALSE;
+    clientCon->pace_idle_capped = 0;
     if (clientCon->dev->screen_sleep_active &&
             clientCon->dev->screen_sleep_overlay_pending > 0)
     {
@@ -4639,6 +4687,7 @@ rdpScheduleDeferredUpdate(rdpClientCon *clientCon)
     uint32_t curTime;
     uint32_t msToWait;
     uint32_t minNextUpdateTime;
+    uint32_t interval;
 
     if (clientCon->updateScheduled)
     {
@@ -4653,8 +4702,16 @@ rdpScheduleDeferredUpdate(rdpClientCon *clientCon)
        for more changes before sending an update. Always waiting the longer
        delay would introduce unnecessarily much latency. */
     msToWait = MIN_MS_TO_WAIT_FOR_MORE_UPDATES;
-    minNextUpdateTime = clientCon->lastUpdateTime +
-                        clientCon->msFrameInterval;
+    interval = clientCon->msFrameInterval;
+    clientCon->pace_idle_capped = 0;
+    if (clientCon->pace_idle_min_ms > (int) interval &&
+            (uint32_t) (curTime - clientCon->dev->last_event_time_ms) >=
+            (uint32_t) clientCon->pace_idle_after_ms)
+    {
+        interval = clientCon->pace_idle_min_ms;
+        clientCon->pace_idle_capped = 1;
+    }
+    minNextUpdateTime = clientCon->lastUpdateTime + interval;
     /* the first check is to gracefully handle the infrequent case of
        the time wrapping around */
     if(clientCon->lastUpdateTime < curTime &&

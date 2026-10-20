@@ -65,6 +65,12 @@ off on the first bad sample and taking rate back after four good ones.
 `XORGXRDP_PACE_MIN_MS` and `_MAX_MS` bound it (default 20-100), and
 `h264_frame_interval` in `xrdp.ini` becomes only the seed.
 
+`XORGXRDP_PACE_IDLE_MIN_MS` puts a floor on the interval once nobody has typed or
+moved the mouse for `XORGXRDP_PACE_IDLE_AFTER_MS` (default 1000). It is off
+by default; 33 leaves 30 fps video alone and cuts an animated page left on
+screen (a dashboard at 50 fps) by 40%. The next key or mouse event lifts it,
+including for a capture already waiting on it.
+
 **The signal has to come from xrdp.** The send-to-acknowledge gap xorgxrdp can
 measure locally starts at *its own* send, and it does not send again until
 `msFrameInterval` has elapsed - so that gap contains the interval being set,
